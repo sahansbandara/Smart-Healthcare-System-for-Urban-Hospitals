@@ -1,45 +1,61 @@
-import mongoose from 'mongoose';
+import mongoose, { Mongoose } from 'mongoose';
 
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://aseshnemal:asesh@cluster0.s5idn.mongodb.net/smart-healthcare';
+const { MONGODB_URI, NODE_ENV } = process.env;
 
 if (!MONGODB_URI) {
-  throw new Error('Please define the MONGODB_URI environment variable inside .env.local');
+  throw new Error('MONGODB_URI is not defined');
 }
 
-/**
- * Global is used here to maintain a cached connection across hot reloads
- * in development. This prevents connections growing exponentially
- * during API Route usage.
- */
-let cached = (global as any).mongoose;
+type ConnectionState = {
+  conn: Mongoose | null;
+  promise: Promise<Mongoose> | null;
+};
 
-if (!cached) {
-  cached = (global as any).mongoose = { conn: null, promise: null };
+declare global {
+  // eslint-disable-next-line no-var
+  var __mongoose: ConnectionState | undefined;
 }
 
-async function dbConnect() {
-  if (cached.conn) {
-    return cached.conn;
+const globalState: ConnectionState = globalThis.__mongoose ?? {
+  conn: null,
+  promise: null,
+};
+
+globalThis.__mongoose = globalState;
+
+export const mongooseInstance = mongoose;
+
+export async function connectDB(): Promise<Mongoose> {
+  if (globalState.conn) {
+    return globalState.conn;
   }
 
-  if (!cached.promise) {
-    const opts = {
-      bufferCommands: false,
-    };
+  if (!globalState.promise) {
+    if (NODE_ENV !== 'production') {
+      console.info('[mongodb] connecting');
+    }
 
-    cached.promise = mongoose.connect(MONGODB_URI, opts).then((mongoose) => {
-      return mongoose;
+    globalState.promise = mongoose.connect(MONGODB_URI, {
+      bufferCommands: false,
+      maxConnecting: 3,
     });
   }
 
   try {
-    cached.conn = await cached.promise;
-  } catch (e) {
-    cached.promise = null;
-    throw e;
-  }
+    globalState.conn = await globalState.promise;
 
-  return cached.conn;
+    if (NODE_ENV !== 'production') {
+      console.info('[mongodb] connected');
+    }
+
+    return globalState.conn;
+  } catch (error) {
+    globalState.promise = null;
+    if (NODE_ENV !== 'production') {
+      console.error('[mongodb] connection error', error);
+    }
+    throw error;
+  }
 }
 
-export default dbConnect;
+export default connectDB;
